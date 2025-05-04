@@ -2,6 +2,15 @@ const express = require('express');
 const router = express.Router();
 const pool = require('../config/db');
 const authenticate = require('../middleware/auth');
+const rateLimit = require('express-rate-limit');
+
+// Rate limiting for template creation
+const createTemplateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10, // Limit each user to 10 template creations per window
+  keyGenerator: (req) => req.userId.toString(),
+  message: 'Too many templates created, please try again later'
+});
 
 // Debug helper
 const debugLog = (message, data = {}) => {
@@ -31,7 +40,7 @@ router.get('/', authenticate, async (req, res) => {
       [req.userId]
     );
 
-    debugLog('Templates fetched successfully', { count: templates.length });
+    res.set('Cache-Control', 'private, max-age=60');
     res.json(templates);
   } catch (err) {
     console.error('Template list error:', err);
@@ -73,11 +82,11 @@ router.get('/manage', authenticate, async (req, res) => {
   }
 });
 
-// GET /api/templates/:id - Get single template (with ID validation)
+// GET /api/templates/:id - Get single template
 router.get('/:id', authenticate, async (req, res) => {
   try {
     const templateId = parseInt(req.params.id);
-    if (isNaN(templateId)) {
+    if (isNaN(templateId) || templateId <= 0) {
       return res.status(400).json({ message: 'Invalid template ID' });
     }
 
@@ -118,17 +127,22 @@ router.get('/:id', authenticate, async (req, res) => {
 });
 
 // POST /api/templates - Create new template
-router.post('/', authenticate, async (req, res) => {
+router.post('/', authenticate, createTemplateLimiter, async (req, res) => {
   try {
     debugLog('Create template request', { 
       userId: req.userId, 
       body: req.body 
     });
 
-    const { title, description, topic, isPublic } = req.body;
+    const { title, description, topic = 'Other', isPublic = false } = req.body;
     
-    if (!title) {
+    if (!title || title.trim().length === 0) {
       return res.status(400).json({ message: 'Title is required' });
+    }
+
+    const validTopics = ['Education', 'Quiz', 'Other'];
+    if (!validTopics.includes(topic)) {
+      return res.status(400).json({ message: 'Invalid topic' });
     }
 
     const { rows: [newTemplate] } = await pool.query(
@@ -148,7 +162,13 @@ router.post('/', authenticate, async (req, res) => {
         is_public as "isPublic",
         created_at as "createdAt",
         updated_at as "updatedAt"`,
-      [req.userId, title, description || null, topic || null, isPublic || false]
+      [
+        req.userId, 
+        title.trim(), 
+        description ? description.trim() : null, 
+        topic, 
+        Boolean(isPublic)
+      ]
     );
 
     debugLog('Template created successfully', { templateId: newTemplate.id });
@@ -166,7 +186,7 @@ router.post('/', authenticate, async (req, res) => {
 router.put('/:id', authenticate, async (req, res) => {
   try {
     const templateId = parseInt(req.params.id);
-    if (isNaN(templateId)) {
+    if (isNaN(templateId) || templateId <= 0) {
       return res.status(400).json({ message: 'Invalid template ID' });
     }
 
@@ -191,6 +211,11 @@ router.put('/:id', authenticate, async (req, res) => {
 
     const { title, description, topic, isPublic } = req.body;
     
+    const validTopics = ['Education', 'Quiz', 'Other'];
+    if (topic && !validTopics.includes(topic)) {
+      return res.status(400).json({ message: 'Invalid topic' });
+    }
+
     const { rows: [updated] } = await pool.query(
       `UPDATE templates SET
         title = COALESCE($1, title),
@@ -208,7 +233,13 @@ router.put('/:id', authenticate, async (req, res) => {
         is_public as "isPublic",
         created_at as "createdAt",
         updated_at as "updatedAt"`,
-      [title, description, topic, isPublic, templateId]
+      [
+        title ? title.trim() : null,
+        description ? description.trim() : null,
+        topic,
+        isPublic !== undefined ? Boolean(isPublic) : null,
+        templateId
+      ]
     );
 
     debugLog('Template updated successfully', { templateId });
@@ -226,7 +257,7 @@ router.put('/:id', authenticate, async (req, res) => {
 router.delete('/:id', authenticate, async (req, res) => {
   try {
     const templateId = parseInt(req.params.id);
-    if (isNaN(templateId)) {
+    if (isNaN(templateId) || templateId <= 0) {
       return res.status(400).json({ message: 'Invalid template ID' });
     }
 
@@ -258,17 +289,68 @@ router.delete('/:id', authenticate, async (req, res) => {
   }
 });
 
+// GET /api/templates/:id/questions - Get all questions for a template
+router.get('/:id/questions', authenticate, async (req, res) => {
+  try {
+    const templateId = parseInt(req.params.id);
+    if (isNaN(templateId) || templateId <= 0) {
+      return res.status(400).json({ message: 'Invalid template ID' });
+    }
+
+    // Verify template access
+    const { rows: [template] } = await pool.query(
+      `SELECT user_id, is_public FROM templates WHERE id = $1`,
+      [templateId]
+    );
+
+    if (!template) {
+      return res.status(404).json({ message: 'Template not found' });
+    }
+
+    if (template.user_id !== req.userId && !template.is_public && req.userRole !== 'admin') {
+      return res.status(403).json({ message: 'Not authorized to view these questions' });
+    }
+
+    const { rows: questions } = await pool.query(
+      `SELECT 
+        id,
+        template_id as "templateId",
+        type,
+        title,
+        description,
+        position,
+        config
+      FROM questions 
+      WHERE template_id = $1
+      ORDER BY position ASC`,
+      [templateId]
+    );
+
+    res.json(questions);
+  } catch (err) {
+    console.error('Questions fetch error:', err);
+    res.status(500).json({ 
+      message: 'Failed to fetch questions',
+      ...(process.env.NODE_ENV === 'development' && { error: err.message })
+    });
+  }
+});
+
 // POST /api/templates/:id/questions - Add a question to a template
 router.post('/:id/questions', authenticate, async (req, res) => {
   try {
     const templateId = parseInt(req.params.id);
-    if (isNaN(templateId)) {
+    if (isNaN(templateId) || templateId <= 0) {
       return res.status(400).json({ error: 'Invalid template ID' });
     }
 
-    const types = ['text', 'textarea', 'number', 'checkbox', 'select'];
-    if (!types.includes(req.body.type)) {
+    const validTypes = ['text', 'textarea', 'number', 'checkbox', 'select'];
+    if (!validTypes.includes(req.body.type)) {
       return res.status(400).json({ error: 'Invalid question type' });
+    }
+
+    if (!req.body.title || req.body.title.trim().length === 0) {
+      return res.status(400).json({ error: 'Question title is required' });
     }
 
     const { rows: [template] } = await pool.query(
@@ -299,8 +381,8 @@ router.post('/:id/questions', authenticate, async (req, res) => {
       [
         templateId,
         req.body.type,
-        req.body.title,
-        req.body.description || null,
+        req.body.title.trim(),
+        req.body.description ? req.body.description.trim() : null,
         position,
         req.body.config || null
       ]
@@ -314,6 +396,86 @@ router.post('/:id/questions', authenticate, async (req, res) => {
       ...(process.env.NODE_ENV === 'development' && { error: err.message })
     });
   }
+});
+
+// PUT /api/templates/:id/questions/order - Update question order
+router.put('/:id/questions/order', authenticate, async (req, res) => {
+  let client;
+  try {
+    const templateId = parseInt(req.params.id);
+    if (isNaN(templateId) || templateId <= 0) {
+      return res.status(400).json({ message: 'Invalid template ID' });
+    }
+
+    const { questionIds } = req.body;
+    if (!Array.isArray(questionIds)) {
+      return res.status(400).json({ message: 'questionIds must be an array' });
+    }
+
+    // Verify template ownership
+    client = await pool.connect();
+    await client.query('BEGIN');
+
+    const { rows: [template] } = await client.query(
+      'SELECT user_id FROM templates WHERE id = $1 FOR UPDATE',
+      [templateId]
+    );
+
+    if (!template) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ message: 'Template not found' });
+    }
+
+    if (template.user_id !== req.userId && req.userRole !== 'admin') {
+      await client.query('ROLLBACK');
+      return res.status(403).json({ message: 'Not authorized' });
+    }
+
+    // Verify all questions belong to this template
+    const { rows } = await client.query(
+      `SELECT COUNT(*) FROM questions 
+       WHERE id = ANY($1::int[]) AND template_id = $2`,
+      [questionIds, templateId]
+    );
+
+    if (parseInt(rows[0].count) !== questionIds.length) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ message: 'Invalid question IDs' });
+    }
+
+    // Update positions
+    for (let i = 0; i < questionIds.length; i++) {
+      await client.query(
+        'UPDATE questions SET position = $1 WHERE id = $2',
+        [i + 1, questionIds[i]]
+      );
+    }
+    
+    await client.query('COMMIT');
+    res.json({ message: 'Question order updated' });
+  } catch (err) {
+    if (client) {
+      await client.query('ROLLBACK');
+      client.release();
+    }
+    console.error('Question reorder error:', err);
+    res.status(500).json({ 
+      message: 'Failed to update question order',
+      ...(process.env.NODE_ENV === 'development' && { error: err.message })
+    });
+  }
+});
+
+// Error handling middleware
+router.use((err, req, res, next) => {
+  console.error('Unhandled route error:', err);
+  res.status(500).json({ 
+    message: 'An unexpected error occurred',
+    ...(process.env.NODE_ENV === 'development' && { 
+      error: err.message,
+      stack: err.stack 
+    })
+  });
 });
 
 module.exports = router;

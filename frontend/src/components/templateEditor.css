@@ -1,0 +1,55 @@
+/* Add to your TemplateEditor.css */
+.loading-spinner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+  }
+  
+  .spinner {
+    border: 3px solid rgba(0, 0, 0, 0.1);
+    border-radius: 50%;
+    border-top-color: #09f;
+    width: 24px;
+    height: 24px;
+    animation: spin 1s linear infinite;
+    margin-bottom: 1rem;
+  }
+  
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+  
+  .alert-danger {
+    position: relative;
+    padding-right: 2.5rem;
+  }
+  
+  .close-btn {
+    position: absolute;
+    right: 1rem;
+    top: 50%;
+    transform: translateY(-50%);
+    background: none;
+    border: none;
+    font-size: 1.5rem;
+    cursor: pointer;
+  }
+  
+  .question-actions {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+  }
+  
+  .add-btn {
+    padding: 0.5rem 1rem;
+  }
+  
+  .questions-list {
+    min-height: 100px;
+    background: #f8f9fa;
+    padding: 1rem;
+    border-radius: 4px;
+  }

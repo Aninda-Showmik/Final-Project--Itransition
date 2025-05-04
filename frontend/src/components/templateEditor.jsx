@@ -1,175 +1,444 @@
-// TemplateEditor.jsx
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { DragDropContext, Droppable, Draggable } from 'react-beautiful-dnd';
 
+const API_BASE = process.env.NODE_ENV === 'development' 
+  ? 'http://localhost:5000' 
+  : '';
+
 const TemplateEditor = ({ editMode = false }) => {
   const { id } = useParams();
   const navigate = useNavigate();
-  const [template, setTemplate] = useState({
-    title: '',
-    description: '',
-    isPublic: false
+  const [state, setState] = useState({
+    template: {
+      title: '',
+      description: '',
+      isPublic: false,
+      topic: 'Other'
+    },
+    questions: [],
+    loading: false,
+    error: ''
   });
-  const [questions, setQuestions] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
 
-  useEffect(() => {
-    if (editMode) {
-      const fetchTemplateAndQuestions = async () => {
-        try {
-          const [templateRes, questionsRes] = await Promise.all([
-            fetch(`http://localhost:5000/api/templates/${id}`, {
-              headers: {
-                'Authorization': `Bearer ${localStorage.getItem('token')}`
-              }
-            }),
-            fetch(`http://localhost:5000/api/templates/${id}/questions`, {
-              headers: {
-                'Authorization': `Bearer ${localStorage.getItem('token')}`
-              }
-            })
-          ]);
+  const { template, questions, loading, error } = state;
 
-          if (!templateRes.ok || !questionsRes.ok) throw new Error('Failed to load data');
-
-          const templateData = await templateRes.json();
-          const questionsData = await questionsRes.json();
-
-          setTemplate(templateData);
-          setQuestions(questionsData);
-        } catch (err) {
-          setError(err.message);
-        }
-      };
-
-      fetchTemplateAndQuestions();
+  // Token management functions
+  const refreshToken = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/api/auth/refresh`, {
+        method: 'POST',
+        credentials: 'include'
+      });
+      
+      if (!response.ok) throw new Error('Token refresh failed');
+      
+      const { token } = await response.json();
+      localStorage.setItem('token', token);
+      return token;
+    } catch (err) {
+      localStorage.removeItem('token');
+      navigate('/login');
+      throw err;
     }
-  }, [id, editMode]);
+  };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setLoading(true);
-    setError('');
+  // Enhanced fetch with token refresh
+  const fetchWithAuth = async (url, options = {}) => {
+    let token = localStorage.getItem('token');
+    
+    // First attempt
+    let response = await fetch(`${API_BASE}${url}`, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+        ...options.headers
+      }
+    });
+
+    // If token expired, try refreshing
+    if (response.status === 403) {
+      try {
+        token = await refreshToken();
+        response = await fetch(`${API_BASE}${url}`, {
+          ...options,
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+            ...options.headers
+          }
+        });
+      } catch (refreshError) {
+        throw new Error('Session expired. Please login again.');
+      }
+    }
+
+    const contentType = response.headers.get('content-type');
+    const text = await response.text();
+    const data = contentType?.includes('application/json') ? JSON.parse(text) : null;
+
+    if (!response.ok) {
+      throw new Error(data?.error || data?.message || text || 'Request failed');
+    }
+
+    return data;
+  };
+
+  // Check token on mount
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    if (!token) {
+      navigate('/login');
+      return;
+    }
 
     try {
-      const url = editMode 
-        ? `http://localhost:5000/api/templates/${id}`
-        : 'http://localhost:5000/api/templates';
+      const payload = JSON.parse(atob(token.split('.')[1]));
+      if (payload.exp * 1000 < Date.now()) {
+        throw new Error('Token expired');
+      }
+    } catch (err) {
+      localStorage.removeItem('token');
+      navigate('/login');
+    }
+  }, [navigate]);
 
+  // Data fetching with abort controller
+  useEffect(() => {
+    if (!editMode || !id) return;
+
+    const abortController = new AbortController();
+
+    const fetchData = async () => {
+      try {
+        setState(prev => ({ ...prev, loading: true, error: '' }));
+        
+        const [templateData, questionsData] = await Promise.all([
+          fetchWithAuth(`/api/templates/${id}`),
+          fetchWithAuth(`/api/templates/${id}/questions`)
+        ]);
+
+        setState(prev => ({
+          ...prev,
+          template: templateData,
+          questions: questionsData.sort((a, b) => a.position - b.position)
+        }));
+      } catch (err) {
+        if (err.name !== 'AbortError') {
+          setState(prev => ({
+            ...prev,
+            error: err.message,
+            loading: false
+          }));
+          setTimeout(() => navigate('/templates'), 3000);
+        }
+      } finally {
+        if (!abortController.signal.aborted) {
+          setState(prev => ({ ...prev, loading: false }));
+        }
+      }
+    };
+
+    fetchData();
+
+    return () => abortController.abort();
+  }, [id, editMode, navigate]);
+
+  // Consolidated save function
+  const handleSaveTemplate = async (e) => {
+    e.preventDefault();
+    setState(prev => ({ ...prev, loading: true, error: '' }));
+
+    try {
+      const url = editMode ? `/api/templates/${id}` : '/api/templates';
       const method = editMode ? 'PUT' : 'POST';
 
-      const res = await fetch(url, {
+      const data = await fetchWithAuth(url, {
         method,
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
-        body: JSON.stringify(template)
-      });
-
-      if (!res.ok) {
-        const errorData = await res.json();
-        throw new Error(errorData.message || 'Failed to save template');
-      }
-
-      alert(editMode ? 'Template updated!' : 'Template created!');
-      navigate(editMode ? `/templates/${id}` : '/templates');
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const onDragEnd = async (result) => {
-    if (!result.destination) return;
-
-    const reordered = Array.from(questions);
-    const [moved] = reordered.splice(result.source.index, 1);
-    reordered.splice(result.destination.index, 0, moved);
-
-    setQuestions(reordered);
-
-    try {
-      await fetch(`http://localhost:5000/api/templates/${id}/questions/reorder`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('token')}`
-        },
         body: JSON.stringify({
-          questionId: result.draggableId,
-          newPosition: result.destination.index
+          ...template,
+          questions: editMode ? undefined : questions.map(q => ({
+            type: q.type,
+            title: q.text,
+            description: q.description,
+            isRequired: q.isRequired
+          }))
         })
       });
+
+      navigate(editMode ? `/templates/${id}` : `/templates/${data.id}/edit`);
     } catch (err) {
-      console.error('Failed to reorder questions:', err);
+      setState(prev => ({
+        ...prev,
+        error: err.message,
+        loading: false
+      }));
     }
   };
+
+  // Optimized drag and drop
+  const onDragEnd = (result) => {
+    if (!result.destination) return;
+
+    const updatedQuestions = [...questions];
+    const [movedQuestion] = updatedQuestions.splice(result.source.index, 1);
+    updatedQuestions.splice(result.destination.index, 0, movedQuestion);
+
+    const reorderedQuestions = updatedQuestions.map((q, idx) => ({
+      ...q,
+      position: idx
+    }));
+
+    setState(prev => ({
+      ...prev,
+      questions: reorderedQuestions
+    }));
+
+    // Debounced API update
+    const updateOrder = async () => {
+      try {
+        await fetchWithAuth(`/api/templates/${id}/questions/order`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            questionIds: reorderedQuestions.map(q => q.id)
+          })
+        });
+      } catch (err) {
+        console.error('Reordering failed:', err);
+        setState(prev => ({
+          ...prev,
+          questions: questions // Rollback on error
+        }));
+      }
+    };
+
+    const debounceTimer = setTimeout(updateOrder, 500);
+    return () => clearTimeout(debounceTimer);
+  };
+
+  // Add new question
+  const addQuestion = (type) => {
+    setState(prev => ({
+      ...prev,
+      questions: [
+        ...prev.questions,
+        {
+          id: `temp-${Date.now()}`,
+          type,
+          text: '',
+          description: '',
+          isRequired: false,
+          position: prev.questions.length
+        }
+      ]
+    }));
+  };
+
+  // Update question field
+  const updateQuestion = (index, field, value) => {
+    setState(prev => {
+      const updatedQuestions = [...prev.questions];
+      updatedQuestions[index] = {
+        ...updatedQuestions[index],
+        [field]: value
+      };
+      return { ...prev, questions: updatedQuestions };
+    });
+  };
+
+  if (loading && !questions.length) {
+    return (
+      <div className="loading-spinner">
+        <div className="spinner"></div>
+        <p>Loading template...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="template-editor">
-      <h2>{editMode ? 'Edit Template' : 'Create New Template'}</h2>
+      <h2>{editMode ? 'Edit Template' : 'New Template'}</h2>
       
-      {error && <div className="error">{error}</div>}
-
-      <form onSubmit={handleSubmit}>
-        <div className="form-group">
-          <label>Title*</label>
-          <input
-            type="text"
-            value={template.title}
-            onChange={(e) => setTemplate({...template, title: e.target.value})}
-            required
-            disabled={loading}
-          />
+      {error && (
+        <div className="alert alert-danger">
+          {error}
+          <button 
+            onClick={() => setState(prev => ({ ...prev, error: '' }))}
+            className="close-btn"
+            aria-label="Close error"
+          >
+            &times;
+          </button>
         </div>
+      )}
 
-        <div className="form-group">
-          <label>Description</label>
-          <textarea
-            value={template.description}
-            onChange={(e) => setTemplate({...template, description: e.target.value})}
-            disabled={loading}
-          />
-        </div>
-
-        <div className="form-group">
-          <label>
+      <form onSubmit={handleSaveTemplate}>
+        <div className="editor-section">
+          <h3>Template Details</h3>
+          
+          <div className="form-group">
+            <label htmlFor="template-title">Title*</label>
             <input
-              type="checkbox"
-              checked={template.isPublic}
-              onChange={(e) => setTemplate({...template, isPublic: e.target.checked})}
+              id="template-title"
+              type="text"
+              value={template.title}
+              onChange={(e) => setState(prev => ({
+                ...prev,
+                template: { ...prev.template, title: e.target.value }
+              }))}
+              required
               disabled={loading}
+              minLength={3}
+              maxLength={100}
             />
-            Make public
-          </label>
+          </div>
+
+          <div className="form-group">
+            <label htmlFor="template-description">Description</label>
+            <textarea
+              id="template-description"
+              value={template.description}
+              onChange={(e) => setState(prev => ({
+                ...prev,
+                template: { ...prev.template, description: e.target.value }
+              }))}
+              disabled={loading}
+              maxLength={500}
+            />
+          </div>
+
+          <div className="form-group-row">
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={template.isPublic}
+                onChange={(e) => setState(prev => ({
+                  ...prev,
+                  template: { ...prev.template, isPublic: e.target.checked }
+                }))}
+                disabled={loading}
+              />
+              <span>Public Template</span>
+            </label>
+
+            <div className="form-group">
+              <label htmlFor="template-topic">Topic</label>
+              <select
+                id="template-topic"
+                value={template.topic}
+                onChange={(e) => setState(prev => ({
+                  ...prev,
+                  template: { ...prev.template, topic: e.target.value }
+                }))}
+                disabled={loading}
+              >
+                {['Education', 'Quiz', 'Other'].map((topic) => (
+                  <option key={topic} value={topic}>
+                    {topic}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
         </div>
 
-        <button type="submit" disabled={loading}>
-          {loading ? 'Saving...' : 'Save Template'}
-        </button>
-      </form>
+        <div className="editor-section">
+          <h3>Questions</h3>
+          <div className="question-actions">
+            {['text', 'number', 'checkbox'].map((type) => (
+              <button
+                key={type}
+                type="button"
+                onClick={() => addQuestion(type)}
+                disabled={loading}
+                className={`add-btn ${type}`}
+              >
+                Add {type.charAt(0).toUpperCase() + type.slice(1)} Question
+              </button>
+            ))}
+          </div>
 
-      {editMode && (
-        <div className="question-reorder-section">
-          <h3>Reorder Questions</h3>
           <DragDropContext onDragEnd={onDragEnd}>
             <Droppable droppableId="questions">
               {(provided) => (
-                <div {...provided.droppableProps} ref={provided.innerRef}>
-                  {questions.map((q, i) => (
-                    <Draggable key={q.id} draggableId={q.id.toString()} index={i}>
+                <div 
+                  {...provided.droppableProps} 
+                  ref={provided.innerRef}
+                  className="questions-list"
+                  aria-label="Questions list"
+                >
+                  {questions.map((question, index) => (
+                    <Draggable 
+                      key={question.id} 
+                      draggableId={question.id.toString()} 
+                      index={index}
+                    >
                       {(provided) => (
                         <div
                           ref={provided.innerRef}
                           {...provided.draggableProps}
-                          className="question-item"
+                          className="question-card"
+                          aria-label={`Question ${index + 1}`}
                         >
-                          <div {...provided.dragHandleProps} className="drag-handle">≡</div>
-                          <div className="question-text">{q.text || `Question ${i + 1}`}</div>
+                          <div className="question-header" {...provided.dragHandleProps}>
+                            <span className="drag-handle" aria-hidden="true">≡</span>
+                            
+                            <select
+                              value={question.type}
+                              onChange={(e) => updateQuestion(index, 'type', e.target.value)}
+                              className="question-type"
+                              aria-label="Question type"
+                            >
+                              {['text', 'number', 'checkbox'].map((type) => (
+                                <option key={type} value={type}>
+                                  {type.charAt(0).toUpperCase() + type.slice(1)}
+                                </option>
+                              ))}
+                            </select>
+
+                            <button
+                              type="button"
+                              onClick={() => setState(prev => ({
+                                ...prev,
+                                questions: prev.questions.filter((_, i) => i !== index)
+                              }))}
+                              className="delete-btn"
+                              aria-label={`Delete question ${index + 1}`}
+                            >
+                              &times;
+                            </button>
+                          </div>
+                          
+                          <input
+                            type="text"
+                            value={question.text}
+                            onChange={(e) => updateQuestion(index, 'text', e.target.value)}
+                            placeholder="Question text"
+                            className="question-input"
+                            required
+                            minLength={3}
+                            aria-label="Question text"
+                          />
+
+                          <textarea
+                            value={question.description}
+                            onChange={(e) => updateQuestion(index, 'description', e.target.value)}
+                            placeholder="Description (optional)"
+                            className="question-description"
+                            rows={2}
+                            aria-label="Question description"
+                          />
+
+                          <label className="required-checkbox">
+                            <input
+                              type="checkbox"
+                              checked={question.isRequired}
+                              onChange={(e) => updateQuestion(index, 'isRequired', e.target.checked)}
+                              aria-label="Required question"
+                            />
+                            <span>Required</span>
+                          </label>
                         </div>
                       )}
                     </Draggable>
@@ -180,7 +449,32 @@ const TemplateEditor = ({ editMode = false }) => {
             </Droppable>
           </DragDropContext>
         </div>
-      )}
+
+        <div className="form-actions">
+          <button 
+            type="submit" 
+            disabled={loading || !template.title || questions.length === 0}
+            className="save-btn"
+          >
+            {loading ? (
+              <>
+                <span className="spinner" aria-hidden="true"></span>
+                Saving...
+              </>
+            ) : (
+              'Save Template'
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate('/templates')}
+            className="cancel-btn"
+            disabled={loading}
+          >
+            Cancel
+          </button>
+        </div>
+      </form>
     </div>
   );
 };
