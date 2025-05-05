@@ -81,33 +81,106 @@ router.post('/login', validateLogin, asyncHandler(async (req, res) => {
   }
 }));
 
-// Register endpoint
 router.post('/register', validateRegister, asyncHandler(async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
+    console.log('Validation errors:', errors.array());
     return res.status(400).json({ errors: errors.array() });
   }
 
   const { name, email, password } = req.body;
+  console.log('Registration attempt:', { name, email });
+
+  const client = await pool.connect(); // Use single client for transaction
 
   try {
-    const userExists = await pool.query(
-      'SELECT * FROM users WHERE email = $1',
+    await client.query('BEGIN'); // Start transaction
+
+    // 1. Check if user exists
+    const userCheck = await client.query(
+      'SELECT id FROM users WHERE email = $1', 
       [email]
     );
+    console.log('User exists check:', userCheck.rows);
 
-    if (userExists.rows.length > 0) {
-      return res.status(409).json({ message: 'User already exists' });
+    if (userCheck.rows.length > 0) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ 
+        success: false,
+        message: 'User already exists' 
+      });
     }
 
-    const salt = await bcrypt.genSalt(10);
+    // 2. Hash password
+    const saltRounds = 10;
+    console.log('Generating salt...');
+    const salt = await bcrypt.genSalt(saltRounds);
     const hashedPassword = await bcrypt.hash(password, salt);
+    console.log('Password hashed successfully');
 
-    const newUser = await pool.query(
-      'INSERT INTO users (name, email, password, role) VALUES ($1, $2, $3, $4) RETURNING *',
+    // 3. Insert user
+    console.log('Attempting to insert user...');
+    const insertResult = await client.query(
+      `INSERT INTO users (name, email, password, role) 
+       VALUES ($1, $2, $3, $4) 
+       RETURNING id, name, email, role, created_at`,
       [name, email, hashedPassword, 'user']
     );
+    
+    const newUser = insertResult.rows[0];
+    console.log('Insert successful:', newUser);
 
+    // 4. Generate token
+    const token = jwt.sign(
+      { userId: newUser.id, role: newUser.role },
+      process.env.JWT_SECRET,
+      { expiresIn: '1h' }
+    );
+
+    await client.query('COMMIT'); // Commit transaction
+
+    // Set cookie
+    res.cookie('token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 3600000
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'User registered successfully',
+      user: {
+        id: newUser.id,
+        name: newUser.name,
+        email: newUser.email,
+        role: newUser.role
+      },
+      token
+    });
+
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Registration error:', err);
+    
+    // Specific error handling
+    if (err.code === '23505') { // Unique violation
+      res.status(409).json({ 
+        success: false,
+        message: 'Email already exists' 
+      });
+    } else {
+      res.status(500).json({ 
+        success: false,
+        message: 'Registration failed',
+        error: process.env.NODE_ENV === 'development' ? err.message : undefined
+      });
+    }
+  } finally {
+    client.release();
+    console.log('Client connection released');
+  }
+}));
     // Auto-login after registration
     const token = jwt.sign(
       { userId: newUser.rows[0].id, role: newUser.rows[0].role },
