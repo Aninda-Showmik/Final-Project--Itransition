@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import PropTypes from 'prop-types';
-import './AdminPanel.css'; // Create this for custom styles
+import './AdminPanel.css';
+
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
 
 const AdminPanel = () => {
   const [users, setUsers] = useState([]);
@@ -21,14 +23,13 @@ const AdminPanel = () => {
       const token = localStorage.getItem('token');
       const user = JSON.parse(localStorage.getItem('user'));
       
-      // Redirect if not admin
       if (user?.role !== 'admin') {
         navigate('/dashboard');
         return;
       }
 
       const response = await fetch(
-        `http://localhost:5000/api/admin/users?page=${pagination.page}&limit=${pagination.limit}`,
+        `${API_BASE_URL}/api/admin/users?page=${pagination.page}&limit=${pagination.limit}`,
         {
           headers: { 
             'Authorization': `Bearer ${token}`,
@@ -38,7 +39,6 @@ const AdminPanel = () => {
         }
       );
 
-      // Handle token expiration
       if (response.status === 401 || response.status === 403) {
         if (attempt <= 1) {
           await attemptTokenRefresh();
@@ -75,7 +75,7 @@ const AdminPanel = () => {
   // Token refresh logic
   const attemptTokenRefresh = async () => {
     try {
-      const response = await fetch('http://localhost:5000/api/auth/refresh', {
+      const response = await fetch(`${API_BASE_URL}/api/auth/refresh`, {
         method: 'POST',
         credentials: 'include'
       });
@@ -100,7 +100,7 @@ const AdminPanel = () => {
     try {
       const token = localStorage.getItem('token');
       const response = await fetch(
-        `http://localhost:5000/api/admin/users/${userId}/role`,
+        `${API_BASE_URL}/api/admin/users/${userId}/role`,
         {
           method: 'PUT',
           headers: {
