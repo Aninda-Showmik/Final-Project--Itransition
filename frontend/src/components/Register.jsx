@@ -25,6 +25,8 @@ const Register = () => {
     setIsLoading(true);
 
     try {
+      console.log('Attempting registration with:', formData); // Debug log
+      
       const response = await fetch(`${process.env.REACT_APP_API_URL}/api/auth/register`, {
         method: 'POST',
         headers: {
@@ -33,16 +35,22 @@ const Register = () => {
         body: JSON.stringify(formData),
       });
 
+      const responseData = await response.json();
+      console.log('Registration response:', responseData); // Debug log
+
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Registration failed');
+        throw new Error(responseData.message || `Registration failed with status ${response.status}`);
       }
 
       navigate('/login', {
-        state: { registrationSuccess: true }
+        state: { 
+          registrationSuccess: true,
+          email: formData.email 
+        }
       });
     } catch (err) {
-      setError(err.message || 'Failed to connect to server');
+      console.error('Registration error:', err); // Debug log
+      setError(err.message || 'Registration failed. Please try again.');
     } finally {
       setIsLoading(false);
     }
@@ -51,7 +59,14 @@ const Register = () => {
   return (
     <div className="auth-container">
       <h2>Register</h2>
-      {error && <div className="error-message">{error}</div>}
+      {error && (
+        <div className="error-message">
+          {error}
+          <button onClick={() => window.location.reload()} className="retry-btn">
+            Try Again
+          </button>
+        </div>
+      )}
       
       <form onSubmit={handleSubmit}>
         <input
@@ -64,6 +79,7 @@ const Register = () => {
           minLength="2"
           maxLength="50"
           autoComplete="name"
+          aria-label="Full Name"
         />
         <input
           type="email"
@@ -73,6 +89,7 @@ const Register = () => {
           onChange={handleChange}
           required
           autoComplete="email"
+          aria-label="Email Address"
         />
         <input
           type="password"
@@ -83,13 +100,20 @@ const Register = () => {
           required
           minLength="6"
           autoComplete="new-password"
+          aria-label="Password"
         />
         <button 
           type="submit" 
           disabled={isLoading}
           aria-busy={isLoading}
+          aria-label={isLoading ? 'Processing registration' : 'Create Account'}
         >
-          {isLoading ? 'Registering...' : 'Create Account'}
+          {isLoading ? (
+            <>
+              <span className="spinner" aria-hidden="true"></span>
+              Registering...
+            </>
+          ) : 'Create Account'}
         </button>
       </form>
 
@@ -97,6 +121,7 @@ const Register = () => {
         <button 
           onClick={() => navigate('/login')}
           className="text-button"
+          aria-label="Navigate to login page"
         >
           Already have an account? Sign In
         </button>
