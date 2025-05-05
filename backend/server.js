@@ -22,11 +22,19 @@ pool.connect()
   .catch(err => console.error('Database connection error:', err));
 
 // Enhanced CORS configuration
+const allowedOrigins = [
+  'https://final-project-itransition-frontend.onrender.com', // Production frontend URL
+];
+
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'https://final-project-itransition-frontend.onrender.com',
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  origin: (origin, callback) => {
+    if (allowedOrigins.includes(origin) || !origin) {  // Allow requests from the specified origin and no-origin (for server-to-server)
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'), false);
+    }
+  },
+  credentials: true, // Allows cookies and authentication headers to be sent
 }));
 
 // Better JSON parsing with limit
