@@ -1,10 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { DragDropContext, Droppable, Draggable } from 'react-beautiful-dnd';
 
-const API_BASE = process.env.NODE_ENV === 'development' 
-  ? 'http://localhost:5000' 
-  : '';
+const API_BASE = process.env.REACT_APP_API_URL || '';
 
 const TemplateEditor = ({ editMode = false }) => {
   const { id } = useParams();
@@ -23,8 +21,8 @@ const TemplateEditor = ({ editMode = false }) => {
 
   const { template, questions, loading, error } = state;
 
-  // Token management functions
-  const refreshToken = async () => {
+  // Memoized token refresh function
+  const refreshToken = useCallback(async () => {
     try {
       const response = await fetch(`${API_BASE}/api/auth/refresh`, {
         method: 'POST',
@@ -41,10 +39,10 @@ const TemplateEditor = ({ editMode = false }) => {
       navigate('/login');
       throw err;
     }
-  };
+  }, [navigate]);
 
   // Enhanced fetch with token refresh
-  const fetchWithAuth = async (url, options = {}) => {
+  const fetchWithAuth = useCallback(async (url, options = {}) => {
     let token = localStorage.getItem('token');
     
     // First attempt
@@ -54,11 +52,12 @@ const TemplateEditor = ({ editMode = false }) => {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${token}`,
         ...options.headers
-      }
+      },
+      credentials: 'include'
     });
 
     // If token expired, try refreshing
-    if (response.status === 403) {
+    if (response.status === 401) {
       try {
         token = await refreshToken();
         response = await fetch(`${API_BASE}${url}`, {
@@ -67,23 +66,21 @@ const TemplateEditor = ({ editMode = false }) => {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${token}`,
             ...options.headers
-          }
+          },
+          credentials: 'include'
         });
       } catch (refreshError) {
         throw new Error('Session expired. Please login again.');
       }
     }
 
-    const contentType = response.headers.get('content-type');
-    const text = await response.text();
-    const data = contentType?.includes('application/json') ? JSON.parse(text) : null;
-
     if (!response.ok) {
-      throw new Error(data?.error || data?.message || text || 'Request failed');
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || 'Request failed');
     }
 
-    return data;
-  };
+    return response.json();
+  }, [refreshToken]);
 
   // Check token on mount
   useEffect(() => {
@@ -143,7 +140,7 @@ const TemplateEditor = ({ editMode = false }) => {
     fetchData();
 
     return () => abortController.abort();
-  }, [id, editMode, navigate]);
+  }, [id, editMode, navigate, fetchWithAuth]);
 
   // Consolidated save function
   const handleSaveTemplate = async (e) => {
@@ -178,7 +175,7 @@ const TemplateEditor = ({ editMode = false }) => {
   };
 
   // Optimized drag and drop
-  const onDragEnd = (result) => {
+  const onDragEnd = useCallback((result) => {
     if (!result.destination) return;
 
     const updatedQuestions = [...questions];
@@ -215,10 +212,10 @@ const TemplateEditor = ({ editMode = false }) => {
 
     const debounceTimer = setTimeout(updateOrder, 500);
     return () => clearTimeout(debounceTimer);
-  };
+  }, [questions, id, fetchWithAuth]);
 
   // Add new question
-  const addQuestion = (type) => {
+  const addQuestion = useCallback((type) => {
     setState(prev => ({
       ...prev,
       questions: [
@@ -233,10 +230,10 @@ const TemplateEditor = ({ editMode = false }) => {
         }
       ]
     }));
-  };
+  }, []);
 
   // Update question field
-  const updateQuestion = (index, field, value) => {
+  const updateQuestion = useCallback((index, field, value) => {
     setState(prev => {
       const updatedQuestions = [...prev.questions];
       updatedQuestions[index] = {
@@ -245,7 +242,7 @@ const TemplateEditor = ({ editMode = false }) => {
       };
       return { ...prev, questions: updatedQuestions };
     });
-  };
+  }, []);
 
   if (loading && !questions.length) {
     return (
