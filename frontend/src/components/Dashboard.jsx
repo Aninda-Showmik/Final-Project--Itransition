@@ -1,10 +1,28 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import '../styles/Dashboard.css'; // Make sure to create this CSS file
+import '../styles/Dashboard.css'; // Ensure this CSS file is created and styled appropriately
 
 const Dashboard = () => {
   const navigate = useNavigate();
-  const user = JSON.parse(localStorage.getItem('user'));
+  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  // Fetch user data on component mount
+  useEffect(() => {
+    const storedUser = localStorage.getItem('user');
+    if (storedUser) {
+      try {
+        const parsedUser = JSON.parse(storedUser);
+        setUser(parsedUser);
+      } catch (error) {
+        console.error('Error parsing user data:', error);
+        handleLogout();
+      }
+    } else {
+      handleLogout();
+    }
+    setLoading(false);
+  }, []);
 
   const handleLogout = () => {
     localStorage.removeItem('token');
@@ -46,16 +64,28 @@ const Dashboard = () => {
     }
   ];
 
+  if (loading) {
+    return (
+      <div className="dashboard-loading">
+        <p>Loading dashboard...</p>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return null; // Or a fallback UI
+  }
+
   return (
     <div className="dashboard-container">
       <div className="dashboard-header">
-        <h1>Welcome, {user?.name}!</h1>
+        <h1>Welcome, {user.name}!</h1>
         <div className="user-info">
-          <p><strong>Email:</strong> {user?.email}</p>
+          <p><strong>Email:</strong> {user.email}</p>
           <p>
             <strong>Role:</strong> 
-            <span className={`role-badge ${user?.role}`}>
-              {user?.role?.toUpperCase()}
+            <span className={`role-badge ${user.role}`}>
+              {user.role.toUpperCase()}
             </span>
           </p>
         </div>
