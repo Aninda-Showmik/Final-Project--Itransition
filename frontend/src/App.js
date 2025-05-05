@@ -18,7 +18,7 @@ const TemplateViewer = React.lazy(() => import('./components/templateViewer'));
 const TemplateManagement = React.lazy(() => import('./components/TemplateManagement'));
 const FormSubmit = React.lazy(() => import('./components/FormSubmit'));
 const FormViewer = React.lazy(() => import('./components/formViewer'));
-const FormsList = React.lazy(() => import('./components/FormsList'));
+const FormsList = React.lazy(() => import('./components/FormList'));
 
 // Enhanced PrivateRoute component with proper redirects
 const PrivateRoute = ({ children, adminOnly = false }) => {
