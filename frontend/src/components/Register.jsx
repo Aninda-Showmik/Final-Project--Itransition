@@ -2,8 +2,6 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import '../styles/App.css';
 
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
-
 const Register = () => {
   const navigate = useNavigate();
   const [formData, setFormData] = useState({
@@ -27,7 +25,7 @@ const Register = () => {
     setIsLoading(true);
 
     try {
-      const response = await fetch(`${API_BASE_URL}/api/auth/register`, {
+      const response = await fetch(`${process.env.REACT_APP_API_URL}/api/auth/register`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -35,17 +33,16 @@ const Register = () => {
         body: JSON.stringify(formData),
       });
 
-      const data = await response.json();
-
       if (!response.ok) {
-        throw new Error(data.message || 'Registration failed');
+        const errorData = await response.json();
+        throw new Error(errorData.message || 'Registration failed');
       }
 
       navigate('/login', {
         state: { registrationSuccess: true }
       });
     } catch (err) {
-      setError(err.message);
+      setError(err.message || 'Failed to connect to server');
     } finally {
       setIsLoading(false);
     }
@@ -60,41 +57,49 @@ const Register = () => {
         <input
           type="text"
           name="name"
-          placeholder="Name"
+          placeholder="Full Name"
           value={formData.name}
           onChange={handleChange}
           required
           minLength="2"
           maxLength="50"
+          autoComplete="name"
         />
         <input
           type="email"
           name="email"
-          placeholder="Email"
+          placeholder="Email Address"
           value={formData.email}
           onChange={handleChange}
           required
+          autoComplete="email"
         />
         <input
           type="password"
           name="password"
-          placeholder="Password"
+          placeholder="Password (min 6 characters)"
           value={formData.password}
           onChange={handleChange}
           required
           minLength="6"
+          autoComplete="new-password"
         />
         <button 
           type="submit" 
           disabled={isLoading}
+          aria-busy={isLoading}
         >
-          {isLoading ? 'Registering...' : 'Register'}
+          {isLoading ? 'Registering...' : 'Create Account'}
         </button>
       </form>
 
       <div className="auth-links">
-        <button onClick={() => navigate('/')}>Back to Home</button>
-        <button onClick={() => navigate('/login')}>Already have an account? Login</button>
+        <button 
+          onClick={() => navigate('/login')}
+          className="text-button"
+        >
+          Already have an account? Sign In
+        </button>
       </div>
     </div>
   );
