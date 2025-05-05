@@ -6,7 +6,7 @@ module.exports = function override(config) {
     new webpack.DefinePlugin({
       'process.env': JSON.stringify({
         NODE_ENV: process.env.NODE_ENV || 'development',
-        REACT_APP_API_BASE_URL: process.env.REACT_APP_API_BASE_URL || 'http://localhost:5000/api'
+        REACT_APP_API_BASE_URL: process.env.REACT_APP_API_BASE_URL'
       })
     })
   );
