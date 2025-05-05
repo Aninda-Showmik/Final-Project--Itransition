@@ -3,132 +3,147 @@ const express = require('express');
 const cors = require('cors');
 const { Pool } = require('pg');
 const jwt = require('jsonwebtoken');
+const helmet = require('helmet'); // Added for security headers
+const rateLimit = require('express-rate-limit'); // Added for rate limiting
 
 const app = express();
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 10000; // Render uses 10000 by default
 
-// Database Connection
-// Database Connection for Render
+// Database Configuration
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false  // Required for connecting securely to Render PostgreSQL
-  }
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+  max: 20, // Set connection pool size
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 5000
 });
 
-// Test database connection
-pool.connect()
-  .then(() => console.log('Connected to PostgreSQL database'))
-  .catch(err => console.error('Database connection error:', err));
+// Database Connection Test
+(async () => {
+  try {
+    const client = await pool.connect();
+    console.log('✅ PostgreSQL connected successfully');
+    client.release();
+  } catch (err) {
+    console.error('❌ Database connection failed:', err);
+    process.exit(1); // Exit if DB connection fails
+  }
+})();
 
-// Enhanced CORS configuration
-const allowedOrigins = [
-  'https://final-project-itransition-frontend.onrender.com', // Production frontend URL
-];
+// Security Middleware
+app.use(helmet());
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true }));
 
-app.use(cors({
+// Rate Limiting
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100 // limit each IP to 100 requests per windowMs
+});
+app.use(limiter);
+
+// CORS Configuration
+const corsOptions = {
   origin: (origin, callback) => {
-    if (allowedOrigins.includes(origin) || !origin) {  // Allow requests from the specified origin and no-origin (for server-to-server)
+    const allowedOrigins = [
+      'https://final-project-itransition-frontend.onrender.com',
+      ...(process.env.NODE_ENV === 'development' ? ['http://localhost:3000'] : [])
+    ];
+    
+    if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
-      callback(new Error('Not allowed by CORS'), false);
+      callback(new Error('Not allowed by CORS'));
     }
   },
-  credentials: true, // Allows cookies and authentication headers to be sent
-}));
+  credentials: true,
+  optionsSuccessStatus: 200
+};
+app.use(cors(corsOptions));
 
-// Better JSON parsing with limit
-app.use(express.json({ limit: '10mb' }));
-
-// Enhanced JWT Authentication Middleware
+// JWT Authentication Middleware (Optimized)
 const authenticate = (req, res, next) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
+  const token = req.headers.authorization?.split(' ')[1];
   
   if (!token) {
-    return res.status(401).json({ 
-      success: false,
-      message: 'Authorization token required' 
-    });
+    return res.status(401).json({ success: false, message: 'Authorization token required' });
   }
 
   jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
     if (err) {
       return res.status(403).json({ 
         success: false,
-        message: 'Invalid or expired token' 
+        message: err.name === 'TokenExpiredError' ? 'Token expired' : 'Invalid token'
       });
     }
     
-    req.userId = decoded.userId;
-    req.userRole = decoded.role;
+    req.user = { id: decoded.userId, role: decoded.role };
     next();
   });
 };
 
 // Route Imports
-const authRoutes = require('./routes/authRoutes');
-const adminRoutes = require('./routes/adminRoutes');
-const templateRoutes = require('./routes/templateRoutes');
-const formRoutes = require('./routes/formRoutes'); // Updated to match your file
-const devRoutes = require('./routes/devRoutes');
+const routes = [
+  { path: '/api/auth', handler: require('./routes/authRoutes') },
+  { path: '/api/admin', handler: require('./routes/adminRoutes'), middleware: [authenticate] },
+  { path: '/api/templates', handler: require('./routes/templateRoutes'), middleware: [authenticate] },
+  { path: '/api/forms', handler: require('./routes/formRoutes'), middleware: [authenticate] }
+];
 
-// API Routes
-app.use('/api/auth', authRoutes);
-app.use('/api/admin', authenticate, adminRoutes);
-app.use('/api/templates', authenticate, templateRoutes);
-app.use('/api/forms', authenticate, formRoutes);
+// Dynamic Route Registration
+routes.forEach(route => {
+  if (route.middleware) {
+    app.use(route.path, ...route.middleware, route.handler);
+  } else {
+    app.use(route.path, route.handler);
+  }
+});
 
 // Development routes
 if (process.env.NODE_ENV === 'development') {
-  app.use('/api/dev', devRoutes);
-  console.log('Development routes enabled');
+  app.use('/api/dev', require('./routes/devRoutes'));
+  console.log('🚧 Development routes enabled');
 }
 
-// Enhanced Health Check
-app.get('/api/health', (req, res) => {
-  res.json({ 
-    status: 'healthy',
-    timestamp: new Date(),
-    database: pool ? 'connected' : 'disconnected',
-    environment: process.env.NODE_ENV || 'development'
-  });
+// Health Check Endpoint
+app.get('/api/health', async (req, res) => {
+  try {
+    await pool.query('SELECT 1');
+    res.json({ 
+      status: 'healthy',
+      database: 'connected',
+      uptime: process.uptime(),
+      timestamp: new Date()
+    });
+  } catch (err) {
+    res.status(503).json({ status: 'unhealthy', database: 'disconnected' });
+  }
 });
 
-// Improved 404 Handler
-app.use((req, res, next) => {
-  res.status(404).json({ 
-    success: false,
-    message: `Route ${req.originalUrl} not found`,
-    suggestion: 'Check API documentation for available endpoints'
-  });
+// Error Handling
+app.use((req, res) => {
+  res.status(404).json({ success: false, message: 'Route not found' });
 });
 
-// Enhanced Error Handler
 app.use((err, req, res, next) => {
-  console.error('[SERVER ERROR]', {
-    path: req.path,
-    method: req.method,
-    error: err.message,
-    stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
-  });
-
-  const statusCode = err.statusCode || 500;
-  res.status(statusCode).json({
+  console.error(`[${new Date().toISOString()}] Error:`, err);
+  res.status(err.status || 500).json({
     success: false,
-    message: err.message || 'Internal Server Error',
-    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
+    message: process.env.NODE_ENV === 'production' ? 'Server error' : err.message
   });
 });
 
-// Server startup
-app.listen(PORT, () => {
-  console.log(`Server running in ${process.env.NODE_ENV || 'development'} mode on port ${PORT}`);
-  console.log(`API Documentation: http://localhost:${PORT}/api-docs`);
+// Server Startup
+const server = app.listen(PORT, () => {
+  console.log(`🚀 Server running in ${process.env.NODE_ENV || 'development'} mode on port ${PORT}`);
 });
 
-// Handle unhandled promise rejections
-process.on('unhandledRejection', (err) => {
-  console.error('Unhandled Rejection:', err);
-  process.exit(1);
+// Graceful Shutdown
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received. Shutting down gracefully...');
+  server.close(() => {
+    pool.end();
+    console.log('Server closed. Database pool drained.');
+    process.exit(0);
+  });
 });
