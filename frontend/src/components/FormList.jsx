@@ -10,7 +10,7 @@ const FormsList = () => {
     const fetchForms = async () => {
       try {
         const token = localStorage.getItem('token');
-        const response = await fetch(`${process.env.REACT_APP_API_BASE_URL}/api/forms`, {
+        const response = await fetch(`${process.env.REACT_APP_API_URL}/api/forms`, {
           headers: {
             'Authorization': `Bearer ${token}`
           }
