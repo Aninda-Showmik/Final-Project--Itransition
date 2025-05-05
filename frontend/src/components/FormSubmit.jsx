@@ -9,7 +9,7 @@ const FormSubmit = () => {
   const [answers, setAnswers] = useState({});
   const [error, setError] = useState('');
 
-  const API_BASE_URL = process.env.REACT_APP_API_BASE_URL;
+  const API_BASE_URL = process.env.REACT_APP_API_URL;
 
   useEffect(() => {
     const fetchTemplate = async () => {
