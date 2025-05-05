@@ -10,7 +10,7 @@ const FormsList = () => {
     const fetchForms = async () => {
       try {
         const token = localStorage.getItem('token');
-        const response = await fetch('http://localhost:5000/api/forms', {
+        const response = await fetch(`${process.env.REACT_APP_API_BASE_URL}/api/forms`, {
           headers: {
             'Authorization': `Bearer ${token}`
           }
@@ -19,7 +19,7 @@ const FormsList = () => {
         if (!response.ok) throw new Error('Failed to load forms');
         
         const data = await response.json();
-        setForms(data.forms || []); // Ensure we always get an array
+        setForms(data.forms || []);
       } catch (err) {
         setError(err.message);
       } finally {
