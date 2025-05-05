@@ -72,7 +72,7 @@ router.post('/login', validateLogin, asyncHandler(async (req, res) => {
         email: user.rows[0].email,
         role: user.rows[0].role
       },
-      token // Also send token in response for mobile clients
+      token
     });
 
   } catch (err) {
@@ -81,6 +81,7 @@ router.post('/login', validateLogin, asyncHandler(async (req, res) => {
   }
 }));
 
+// Register endpoint
 router.post('/register', validateRegister, asyncHandler(async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -91,10 +92,10 @@ router.post('/register', validateRegister, asyncHandler(async (req, res) => {
   const { name, email, password } = req.body;
   console.log('Registration attempt:', { name, email });
 
-  const client = await pool.connect(); // Use single client for transaction
+  const client = await pool.connect();
 
   try {
-    await client.query('BEGIN'); // Start transaction
+    await client.query('BEGIN');
 
     // 1. Check if user exists
     const userCheck = await client.query(
@@ -137,7 +138,7 @@ router.post('/register', validateRegister, asyncHandler(async (req, res) => {
       { expiresIn: '1h' }
     );
 
-    await client.query('COMMIT'); // Commit transaction
+    await client.query('COMMIT');
 
     // Set cookie
     res.cookie('token', token, {
@@ -163,7 +164,6 @@ router.post('/register', validateRegister, asyncHandler(async (req, res) => {
     await client.query('ROLLBACK');
     console.error('Registration error:', err);
     
-    // Specific error handling
     if (err.code === '23505') { // Unique violation
       res.status(409).json({ 
         success: false,
@@ -179,37 +179,6 @@ router.post('/register', validateRegister, asyncHandler(async (req, res) => {
   } finally {
     client.release();
     console.log('Client connection released');
-  }
-}));
-    // Auto-login after registration
-    const token = jwt.sign(
-      { userId: newUser.rows[0].id, role: newUser.rows[0].role },
-      process.env.JWT_SECRET,
-      { expiresIn: '1h' }
-    );
-
-    res.cookie('token', token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'strict',
-      maxAge: 3600000
-    });
-
-    res.status(201).json({
-      success: true,
-      message: 'User registered successfully',
-      user: {
-        id: newUser.rows[0].id,
-        name: newUser.rows[0].name,
-        email: newUser.rows[0].email,
-        role: newUser.rows[0].role
-      },
-      token
-    });
-
-  } catch (err) {
-    console.error('Registration error:', err);
-    res.status(500).json({ message: 'Server error during registration' });
   }
 }));
 
