@@ -8,12 +8,12 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 // Database Connection
+// Database Connection for Render
 const pool = new Pool({
-  user: process.env.DB_USER,
-  host: process.env.DB_HOST,
-  database: process.env.DB_NAME,
-  password: process.env.DB_PASSWORD,
-  port: process.env.DB_PORT,
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false  // Required for connecting securely to Render PostgreSQL
+  }
 });
 
 // Test database connection
