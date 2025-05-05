@@ -1,121 +1,157 @@
-// frontend/src/App.js
-import React from 'react';
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
-import HomePage from './components/HomePage';
-import Login from './components/Login';
-import Register from './components/Register';
-import Dashboard from './components/Dashboard';
-import AdminPanel from './components/AdminPanel';
-import TemplateList from './components/templateList';
-import TemplateEditor from './components/templateEditor';
-import TemplateViewer from './components/templateViewer';
-import TemplateManagement from './components/TemplateManagement';
-import FormSubmit from './components/FormSubmit';
-import FormViewer from './components/formViewer';
-import ThemeToggle from './components/ThemeToggle';
-import FormsList from './components/FormList';
-import ErrorBoundary from './components/ErrorBoundary';
-import './styles/App.css';
-import { ThemeProvider } from './contexts/ThemeContext';
+import React, { useState, useEffect } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
 
-const PrivateRoute = ({ children, adminOnly = false }) => {
-  const token = localStorage.getItem('token');
-  const user = JSON.parse(localStorage.getItem('user'));
+const TemplateViewer = () => {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const [state, setState] = useState({
+    template: null,
+    loading: true,
+    error: ''
+  });
+  const API_BASE = process.env.REACT_APP_API_URL || '';
 
-  if (!token) return <Navigate to="/login" replace />;
-  if (adminOnly && user?.role !== 'admin') return <Navigate to="/dashboard" replace />;
+  useEffect(() => {
+    const abortController = new AbortController();
 
-  return children;
-};
+    const fetchTemplate = async () => {
+      try {
+        const token = localStorage.getItem('token');
+        if (!token) {
+          navigate('/login');
+          return;
+        }
 
-const Layout = ({ children }) => {
+        const response = await fetch(`${API_BASE}/api/templates/${id}`, {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          },
+          credentials: 'include',
+          signal: abortController.signal
+        });
+
+        if (response.status === 401) {
+          navigate('/login');
+          return;
+        }
+
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const contentType = response.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+          throw new Error('Received non-JSON response');
+        }
+
+        const data = await response.json();
+        setState({
+          template: data,
+          loading: false,
+          error: ''
+        });
+      } catch (err) {
+        if (err.name !== 'AbortError') {
+          console.error('Fetch error:', err);
+          setState(prev => ({
+            ...prev,
+            loading: false,
+            error: err.message || 'Failed to load template. Please try again.'
+          }));
+        }
+      }
+    };
+
+    fetchTemplate();
+
+    return () => abortController.abort();
+  }, [id, navigate, API_BASE]);
+
+  if (state.loading) {
+    return (
+      <div className="loading-container">
+        <div className="spinner"></div>
+        <p>Loading template...</p>
+      </div>
+    );
+  }
+
+  if (state.error) {
+    return (
+      <div className="error-container">
+        <div className="error-message">
+          {state.error}
+          <button 
+            onClick={() => window.location.reload()} 
+            className="retry-btn"
+          >
+            Retry
+          </button>
+          <button 
+            onClick={() => navigate('/templates')} 
+            className="back-btn"
+          >
+            Back to Templates
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!state.template) {
+    return (
+      <div className="empty-state">
+        <p>No template found</p>
+        <button 
+          onClick={() => navigate('/templates')} 
+          className="back-btn"
+        >
+          Back to Templates
+        </button>
+      </div>
+    );
+  }
+
   return (
-    <div className="app-container">
-      <ThemeToggle className="theme-toggle" />
-      <main className="main-content">
-        {children}
-      </main>
+    <div className="template-viewer-container">
+      <header className="template-header">
+        <h1>{state.template.title}</h1>
+        <div className="template-meta">
+          <span className={`template-visibility ${state.template.is_public ? 'public' : 'private'}`}>
+            {state.template.is_public ? 'Public' : 'Private'}
+          </span>
+          <span className="template-topic">{state.template.topic || 'General'}</span>
+          <span className="template-date">
+            Created: {new Date(state.template.created_at).toLocaleDateString()}
+          </span>
+        </div>
+      </header>
+
+      <div className="template-content">
+        {state.template.description && (
+          <div className="template-description">
+            <h2>Description</h2>
+            <p>{state.template.description}</p>
+          </div>
+        )}
+
+        <div className="template-actions">
+          <button 
+            onClick={() => navigate(`/templates/${id}/edit`)}
+            className="edit-btn"
+          >
+            Edit Template
+          </button>
+          <button 
+            onClick={() => navigate(`/templates/${id}/use`)}
+            className="use-btn"
+          >
+            Use Template
+          </button>
+        </div>
+      </div>
     </div>
   );
 };
 
-function App() {
-  return (
-    <ThemeProvider>
-      <Router>
-        <Layout>
-          <ErrorBoundary>
-            <Routes>
-              {/* Public Routes */}
-              <Route path="/" element={<HomePage />} />
-              <Route path="/login" element={<Login />} />
-              <Route path="/register" element={<Register />} />
-
-              {/* Template-related Routes */}
-              <Route path="/templates" element={
-                <PrivateRoute>
-                  <TemplateList />
-                </PrivateRoute>
-              } />
-              <Route path="/templates/new" element={
-                <PrivateRoute>
-                  <TemplateEditor />
-                </PrivateRoute>
-              } />
-              <Route path="/templates/manage" element={
-                <PrivateRoute adminOnly>
-                  <TemplateManagement />
-                </PrivateRoute>
-              } />
-              <Route path="/templates/:id/edit" element={
-                <PrivateRoute>
-                  <TemplateEditor editMode={true} />
-                </PrivateRoute>
-              } />
-              <Route path="/templates/:id" element={
-                <PrivateRoute>
-                  <TemplateViewer />
-                </PrivateRoute>
-              } />
-
-              {/* Form-related Routes */}
-              <Route path="/forms/new/:templateId" element={
-                <PrivateRoute>
-                  <FormSubmit />
-                </PrivateRoute>
-              } />
-              <Route path="/forms/:id" element={
-                <PrivateRoute>
-                  <FormViewer />
-                </PrivateRoute>
-              } />
-
-              {/* Authenticated Routes */}
-              <Route path="/dashboard" element={
-                <PrivateRoute>
-                  <Dashboard />
-                </PrivateRoute>
-              } />
-
-              {/* Admin-only Routes */}
-              <Route path="/admin" element={
-                <PrivateRoute adminOnly>
-                  <AdminPanel />
-                </PrivateRoute>
-              } />
-
-              {/* Forms List Route */}
-              <Route path="/forms" element={
-                <PrivateRoute>
-                  <FormsList />
-                </PrivateRoute>
-              } />
-            </Routes>
-          </ErrorBoundary>
-        </Layout>
-      </Router>
-    </ThemeProvider>
-  );
-}
-
-export default App;
+export default TemplateViewer;
