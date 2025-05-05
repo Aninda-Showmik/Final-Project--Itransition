@@ -4,24 +4,38 @@ const User = require('../models/User');
 const authenticate = require('../middleware/auth');
 const adminAccess = require('../middleware/adminAccess');
 
-// Apply admin middleware globally to all routes in this file
+// Apply admin middleware globally to all routes
 router.use(authenticate);
 router.use(adminAccess);
+
+// Constants for pagination and role validation
+const DEFAULT_PAGE = 1;
+const DEFAULT_LIMIT = 10;
+const VALID_ROLES = ['admin', 'user'];
+const MIN_SEARCH_CHARS = 3;
 
 // Get all users (paginated)
 router.get('/users', async (req, res) => {
   try {
-    const { page = 1, limit = 10 } = req.query;
+    const page = parseInt(req.query.page) || DEFAULT_PAGE;
+    const limit = parseInt(req.query.limit) || DEFAULT_LIMIT;
     const offset = (page - 1) * limit;
     
-    const users = await User.getPaginatedUsers(limit, offset);
-    const totalUsers = await User.getTotalUserCount();
+    // Validate pagination parameters
+    if (page < 1 || limit < 1) {
+      return res.status(400).json({ message: 'Invalid pagination parameters' });
+    }
+
+    const [users, totalUsers] = await Promise.all([
+      User.getPaginatedUsers(limit, offset),
+      User.getTotalUserCount()
+    ]);
     
     res.json({
       data: users,
       pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
+        page,
+        limit,
         total: parseInt(totalUsers),
         totalPages: Math.ceil(totalUsers / limit)
       }
@@ -30,64 +44,85 @@ router.get('/users', async (req, res) => {
     console.error('Admin user list error:', err);
     res.status(500).json({ 
       message: 'Failed to fetch users',
-      error: process.env.NODE_ENV === 'development' ? err.message : undefined
+      ...(process.env.NODE_ENV === 'development' && { error: err.message })
     });
   }
 });
 
-// Promote/demote users with validation
+// Promote/demote users with enhanced validation
 router.put('/users/:id/role', async (req, res) => {
   try {
     const { id } = req.params;
     const { role } = req.body;
     
     // Validate role
-    if (!['admin', 'user'].includes(role)) {
-      return res.status(400).json({ message: 'Invalid role specified' });
+    if (!VALID_ROLES.includes(role)) {
+      return res.status(400).json({ message: `Role must be one of: ${VALID_ROLES.join(', ')}` });
     }
 
     // Prevent self-demotion
     if (id === req.user.id && role === 'user') {
-      return res.status(403).json({ message: 'Cannot remove your own admin privileges' });
+      return res.status(403).json({ 
+        message: 'Cannot remove your own admin privileges' 
+      });
     }
 
     // Check minimum admin count
     if (role === 'user') {
       const adminCount = await User.getAdminCount();
       if (adminCount <= 1) {
-        return res.status(403).json({ message: 'System must have at least one admin' });
+        return res.status(403).json({ 
+          message: 'System must have at least one admin' 
+        });
       }
     }
 
-    await User.setUserRole(id, role);
+    const updatedUser = await User.setUserRole(id, role);
+    if (!updatedUser) {
+      return res.status(404).json({ message: 'User not found' });
+    }
     
     res.json({ 
       message: `User role updated to ${role}`,
-      newRole: role
+      user: {
+        id: updatedUser.id,
+        name: updatedUser.name,
+        email: updatedUser.email,
+        role: updatedUser.role
+      }
     });
     
   } catch (err) {
     console.error('Role update error:', err);
-    res.status(400).json({ 
+    res.status(500).json({ 
       message: 'Failed to update user role',
-      error: process.env.NODE_ENV === 'development' ? err.message : undefined
+      ...(process.env.NODE_ENV === 'development' && { error: err.message })
     });
   }
 });
 
-// Enhanced user search
+// Enhanced user search with validation
 router.get('/users/search', async (req, res) => {
   try {
     const { query } = req.query;
-    if (!query || query.length < 3) {
-      return res.status(400).json({ message: 'Search query must be at least 3 characters' });
+    
+    if (!query || query.length < MIN_SEARCH_CHARS) {
+      return res.status(400).json({ 
+        message: `Search query must be at least ${MIN_SEARCH_CHARS} characters` 
+      });
     }
     
     const users = await User.searchUsers(query);
-    res.json(users);
+    res.json({
+      count: users.length,
+      results: users
+    });
   } catch (err) {
     console.error('User search error:', err);
-    res.status(500).json({ message: 'Search failed' });
+    res.status(500).json({ 
+      message: 'Search failed',
+      ...(process.env.NODE_ENV === 'development' && { error: err.message })
+    });
   }
 });
 
