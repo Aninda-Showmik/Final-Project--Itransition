@@ -22,7 +22,7 @@ const Login = () => {
     setError('');
 
     try {
-      const API_BASE_URL = process.env.REACT_APP_API_BASE_URL;
+      const API_BASE_URL = process.env.REACT_APP_API_URL;
       const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
         method: 'POST',
         headers: {
