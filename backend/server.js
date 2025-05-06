@@ -39,19 +39,16 @@ app.use(express.urlencoded({ extended: true }));
 
 // Rate Limiting
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit each IP to 100 requests per windowMs
 });
 app.use(limiter);
 
-// CORS Configuration
-
+// CORS Configuration (only allow requests from the frontend hosted on Render)
 const corsOptions = {
   origin: 'https://final-project-itransition-frontend.onrender.com',
-  // other CORS options if necessary (e.g., methods, headers, etc.)
-
-  credentials: true,
-  optionsSuccessStatus: 200
+  credentials: true, // Allow cookies to be sent
+  optionsSuccessStatus: 200, // For legacy browser support
 };
 app.use(cors(corsOptions));
 
@@ -99,14 +96,7 @@ app.get('/api/auth/test', (req, res) => {
   res.json({ success: true, message: "Auth routes are working!" });
 });
 
-// Development routes
-if (process.env.NODE_ENV === 'development') {
-  const devRoutes = require(path.join(__dirname, 'routes', 'devRoutes'));
-  app.use('/api/dev', devRoutes);
-  console.log('🚧 Development routes enabled');
-}
-
-// Health Check
+// Health Check Route
 app.get('/api/health', async (req, res) => {
   try {
     await pool.query('SELECT 1');
@@ -139,6 +129,9 @@ app.use((err, req, res, next) => {
     ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
   });
 });
+
+// Static File Handling (For assets if required)
+app.use(express.static(path.join(__dirname, 'public'))); // Serve static assets from 'public' folder
 
 // Server Startup
 const server = app.listen(PORT, () => {
