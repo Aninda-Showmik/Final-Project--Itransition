@@ -44,10 +44,10 @@ router.get('/users', async (req, res) => {
   try {
     // Validate and sanitize inputs
     const page = Math.max(DEFAULT_PAGE, parseInt(req.query.page) || DEFAULT_PAGE);
-    const limit = Math.min(
-      MAX_LIMIT, 
-      Math.max(1, parseInt(req.query.limit) || DEFAULT_LIMIT
-    );
+const limit = Math.min(
+  MAX_LIMIT, 
+  Math.max(1, parseInt(req.query.limit) || DEFAULT_LIMIT)
+);  // ← Now properly closed
     const offset = Math.max(0, (page - 1) * limit);
 
     // Execute parallel queries
