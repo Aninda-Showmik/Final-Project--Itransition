@@ -45,11 +45,11 @@ const limiter = rateLimit({
 app.use(limiter);
 
 // CORS Configuration
+
 const corsOptions = {
-  origin: [
-    'https://final-project-itransition-frontend.onrender.com',
-    ...(process.env.NODE_ENV === 'development' ? ['http://localhost:3000'] : [])
-  ],
+  origin: 'https://final-project-itransition-frontend.onrender.com',
+  // other CORS options if necessary (e.g., methods, headers, etc.)
+
   credentials: true,
   optionsSuccessStatus: 200
 };
