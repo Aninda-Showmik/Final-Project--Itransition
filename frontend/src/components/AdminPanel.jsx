@@ -3,8 +3,6 @@ import { useNavigate } from 'react-router-dom';
 import PropTypes from 'prop-types';
 import './AdminPanel.css';
 
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
-
 const AdminPanel = () => {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -17,19 +15,39 @@ const AdminPanel = () => {
   });
   const navigate = useNavigate();
 
-  // Fetch users with retry logic
+  // Enhanced fetch with timeout and retry
+  const fetchWithTimeout = async (url, options, timeout = 8000) => {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeout);
+    
+    try {
+      const response = await fetch(url, {
+        ...options,
+        signal: controller.signal
+      });
+      clearTimeout(id);
+      return response;
+    } catch (err) {
+      clearTimeout(id);
+      throw err;
+    }
+  };
+
   const fetchUsers = async (attempt = 1) => {
     try {
+      setLoading(true);
+      setError('');
+      
       const token = localStorage.getItem('token');
       const user = JSON.parse(localStorage.getItem('user'));
       
-      if (user?.role !== 'admin') {
+      if (!user || user?.role !== 'admin') {
         navigate('/dashboard');
         return;
       }
 
-      const response = await fetch(
-        `${API_BASE_URL}/api/admin/users?page=${pagination.page}&limit=${pagination.limit}`,
+      const response = await fetchWithTimeout(
+        `${process.env.REACT_APP_API_URL}/api/admin/users?page=${pagination.page}&limit=${pagination.limit}`,
         {
           headers: { 
             'Authorization': `Bearer ${token}`,
@@ -39,54 +57,64 @@ const AdminPanel = () => {
         }
       );
 
-      if (response.status === 401 || response.status === 403) {
-        if (attempt <= 1) {
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        if ([401, 403].includes(response.status) && attempt <= 2) {
           await attemptTokenRefresh();
           return fetchUsers(attempt + 1);
         }
-        throw new Error('Session expired. Please login again.');
+        throw new Error(
+          errorData.message || 
+          `Request failed with status ${response.status}`
+        );
       }
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || 'Failed to fetch users');
-      }
-      
       const { data, pagination: paginationData } = await response.json();
       
       if (!Array.isArray(data)) {
-        throw new Error('Invalid user data format received');
+        throw new Error('Invalid data format received from server');
       }
 
       setUsers(data);
-      setPagination(paginationData);
-      setError('');
+      setPagination(prev => ({
+        ...prev,
+        ...paginationData,
+        page: Math.min(paginationData.page, paginationData.totalPages)
+      }));
     } catch (err) {
-      console.error('User fetch error:', err);
-      setError(err.message);
-      if (err.message.includes('expired')) {
-        handleLogout();
+      console.error('Fetch error:', err);
+      setError(
+        err.name === 'AbortError' 
+          ? 'Request timed out. Please try again.' 
+          : err.message
+      );
+      
+      if (err.message.includes('expired') || err.message.includes('401')) {
+        setTimeout(handleLogout, 2000); // Delay logout to show message
       }
     } finally {
       setLoading(false);
     }
   };
 
-  // Token refresh logic
   const attemptTokenRefresh = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/auth/refresh`, {
-        method: 'POST',
-        credentials: 'include'
-      });
+      const response = await fetchWithTimeout(
+        `${process.env.REACT_APP_API_URL}/api/auth/refresh`,
+        {
+          method: 'POST',
+          credentials: 'include'
+        }
+      );
       
       if (!response.ok) throw new Error('Token refresh failed');
       
       const { token } = await response.json();
       localStorage.setItem('token', token);
-    } catch (refreshError) {
-      console.error('Refresh failed:', refreshError);
-      handleLogout();
+      return true;
+    } catch (err) {
+      console.error('Refresh failed:', err);
+      throw err;
     }
   };
 
@@ -98,9 +126,11 @@ const AdminPanel = () => {
 
   const handleRoleChange = async (userId, newRole) => {
     try {
+      setError('');
       const token = localStorage.getItem('token');
-      const response = await fetch(
-        `${API_BASE_URL}/api/admin/users/${userId}/role`,
+      
+      const response = await fetchWithTimeout(
+        `${process.env.REACT_APP_API_URL}/api/admin/users/${userId}/role`,
         {
           method: 'PUT',
           headers: {
@@ -111,11 +141,6 @@ const AdminPanel = () => {
         }
       );
 
-      if (response.status === 401 || response.status === 403) {
-        await attemptTokenRefresh();
-        return handleRoleChange(userId, newRole);
-      }
-
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.message || 'Failed to update role');
@@ -123,26 +148,37 @@ const AdminPanel = () => {
       
       setUsers(prevUsers => 
         prevUsers.map(user => 
-          user.id === userId ? { ...user, role: newRole } : user
+          user._id === userId ? { ...user, role: newRole } : user
         )
       );
     } catch (err) {
       console.error('Role update error:', err);
       setError(err.message);
-      if (err.message.includes('expired')) {
+      if (err.message.includes('expired') || err.message.includes('401')) {
         handleLogout();
       }
     }
   };
 
   const handlePaginationChange = (newPage) => {
-    setPagination(prev => ({ ...prev, page: newPage }));
+    if (newPage >= 1 && newPage <= pagination.totalPages) {
+      setPagination(prev => ({ ...prev, page: newPage }));
+    }
   };
 
   useEffect(() => {
-    fetchUsers();
+    const abortController = new AbortController();
+    
+    const loadData = async () => {
+      await fetchUsers();
+    };
+    
+    loadData();
+    
+    return () => abortController.abort();
   }, [pagination.page, pagination.limit]);
 
+  // Render loading state
   if (loading) return (
     <div className="admin-loading">
       <div className="spinner"></div>
@@ -150,26 +186,43 @@ const AdminPanel = () => {
     </div>
   );
 
+  // Render error state
   if (error) return (
     <div className="admin-error">
-      <p>{error}</p>
-      <button onClick={fetchUsers}>Retry</button>
-      <button onClick={handleLogout}>Login Again</button>
+      <p className="error-message">{error}</p>
+      <div className="error-actions">
+        <button onClick={fetchUsers} className="retry-btn">
+          Retry
+        </button>
+        <button onClick={handleLogout} className="logout-btn">
+          Login Again
+        </button>
+      </div>
     </div>
   );
 
+  // Main render
   return (
     <div className="admin-container">
       <header className="admin-header">
         <h1>User Management</h1>
-        <button className="logout-btn" onClick={handleLogout}>Logout</button>
+        <div className="header-actions">
+          <span className="user-count">
+            Showing {users.length} of {pagination.total} users
+          </span>
+          <button onClick={handleLogout} className="logout-btn">
+            Logout
+          </button>
+        </div>
       </header>
 
       <div className="admin-content">
         {users.length === 0 ? (
           <div className="no-users">
             <p>No users found</p>
-            <button onClick={fetchUsers}>Refresh List</button>
+            <button onClick={fetchUsers} className="refresh-btn">
+              Refresh List
+            </button>
           </div>
         ) : (
           <>
@@ -180,34 +233,41 @@ const AdminPanel = () => {
                     <th>ID</th>
                     <th>Name</th>
                     <th>Email</th>
+                    <th>Status</th>
                     <th>Role</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {users.map(user => (
-                    <tr key={user.id}>
-                      <td>{user.id}</td>
-                      <td>{user.name || 'N/A'}</td>
+                    <tr key={user._id}>
+                      <td>{user._id.substring(18)}</td>
+                      <td>{user.username || 'N/A'}</td>
                       <td>{user.email}</td>
+                      <td className={`status-${user.status || 'active'}`}>
+                        {user.status || 'active'}
+                      </td>
                       <td className={`role-${user.role}`}>{user.role}</td>
                       <td className="actions">
                         {user.role === 'admin' ? (
                           <button
                             className="btn-demote"
-                            onClick={() => handleRoleChange(user.id, 'user')}
+                            onClick={() => handleRoleChange(user._id, 'user')}
                             disabled={users.filter(u => u.role === 'admin').length <= 1}
-                            title={users.filter(u => u.role === 'admin').length <= 1 ? 
-                              "System must have at least one admin" : ""}
+                            title={
+                              users.filter(u => u.role === 'admin').length <= 1 
+                                ? "System must have at least one admin" 
+                                : ""
+                            }
                           >
-                            Demote to User
+                            Demote
                           </button>
                         ) : (
                           <button
                             className="btn-promote"
-                            onClick={() => handleRoleChange(user.id, 'admin')}
+                            onClick={() => handleRoleChange(user._id, 'admin')}
                           >
-                            Promote to Admin
+                            Promote
                           </button>
                         )}
                       </td>
@@ -221,18 +281,37 @@ const AdminPanel = () => {
               <button
                 disabled={pagination.page <= 1}
                 onClick={() => handlePaginationChange(pagination.page - 1)}
+                className="pagination-btn"
               >
-                &laquo; Previous
+                Previous
               </button>
-              <span>
-                Page {pagination.page} of {pagination.totalPages} 
-                (Total: {pagination.total} users)
-              </span>
+              
+              <div className="page-info">
+                Page {pagination.page} of {pagination.totalPages}
+              </div>
+              
+              <select
+                value={pagination.limit}
+                onChange={(e) => setPagination(prev => ({
+                  ...prev,
+                  limit: Number(e.target.value),
+                  page: 1
+                }))}
+                className="limit-select"
+              >
+                {[5, 10, 20, 50].map(size => (
+                  <option key={size} value={size}>
+                    Show {size}
+                  </option>
+                ))}
+              </select>
+              
               <button
                 disabled={pagination.page >= pagination.totalPages}
                 onClick={() => handlePaginationChange(pagination.page + 1)}
+                className="pagination-btn"
               >
-                Next &raquo;
+                Next
               </button>
             </div>
           </>
@@ -245,10 +324,11 @@ const AdminPanel = () => {
 AdminPanel.propTypes = {
   users: PropTypes.arrayOf(
     PropTypes.shape({
-      id: PropTypes.oneOfType([PropTypes.string, PropTypes.number]).isRequired,
-      name: PropTypes.string,
+      _id: PropTypes.string.isRequired,
+      username: PropTypes.string,
       email: PropTypes.string.isRequired,
-      role: PropTypes.oneOf(['admin', 'user']).isRequired
+      role: PropTypes.oneOf(['admin', 'user']).isRequired,
+      status: PropTypes.oneOf(['active', 'banned', 'pending'])
     })
   )
 };
